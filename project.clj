@@ -1,6 +1,6 @@
-(defproject tofu-avoidance "0.0.1-SNAPSHOT"
-  :description "FIXME: write description"
-  :url "http://example.com/FIXME"
+(defproject tofu-avoidance "0.0.1"
+  :description "Simple game just avoid tofu"
+  :url "https://github.com/mizyoukan/tofu-avoidance"
   :license {:name "Eclipse Public License - v 1.0"
             :url "http://www.eclipse.org/legal/epl-v10.html"
             :distribution :repo}
