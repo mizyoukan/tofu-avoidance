@@ -1,5 +1,6 @@
 (ns tofu-avoidance.core
-  (:require [goog.events :as events]
+  (:require [goog.dom :as dom]
+            [goog.events :as events]
             [cljs.core.async :as async :refer [<! chan put!]])
   (:require-macros [cljs.core.async.macros :refer [go go-loop]]))
 
@@ -19,7 +20,7 @@
 (def ^:const enemy-acceleration 0.05)
 
 ;; ---------------------------------------------------------------------------
-;; Canvas UI
+;; Canvas UI {{{
 
 (def animation-frame
   (or (.-requestAnimationFrame js/window)
@@ -30,7 +31,7 @@
       (fn [callback] (js/setTimeout callback 16))))
 
 (defn init-canvas []
-  (let [canvas (.getElementById js/document "app")
+  (let [canvas (dom/getElement "app")
         ctx (.getContext canvas "2d")]
     {:canvas canvas
      :ctx ctx}))
@@ -38,8 +39,28 @@
 (defn fill-style [ctx color]
   (set! (.-fillStyle ctx) color))
 
+(defn font!
+  ([ctx family size]
+   (font! ctx family nil size))
+  ([ctx family style size]
+   (set! (.-font ctx) (str (if (empty? style) "" (str style " "))
+                           size "pt '" family "'"))))
+
+(defn text-align! [ctx align]
+  (set! (.-textAlign ctx) (name align)))
+
+(defn fill-text!
+  ([ctx texts x y line-height]
+   (doseq [[idx t] (map-indexed vector texts)
+           :let [y (+ y (* idx line-height))]]
+     (fill-text! ctx t x y)))
+  ([ctx text x y]
+   (.fillText ctx text x y)))
+
+;; }}}
+
 ;; ---------------------------------------------------------------------------
-;; Geometry logic
+;; Geometry logic {{{
 
 (defn bottom-right [{:keys [x y w h]}]
   {:x (+ x w)
@@ -59,16 +80,20 @@
          (< (:x tl) (:x br2))
          (< (:x tl2) (:x br)))))
 
+;; }}}
+
 ;; ---------------------------------------------------------------------------
-;; Event handling
+;; Event handling {{{
 
 (def keycodes
   {37 :left
    38 :up
    39 :right
-   40 :down})
+   40 :down
+   13 :enter})
 
 (def move-keys "Keys trigger movement" #{:left :up :right :down})
+(def reset-key "Reset key" #{:enter})
 
 (defn event->key [event]
   (get keycodes (.-keyCode event) :key-not-found))
@@ -80,11 +105,14 @@
                    #(put! ch (parse-event (event->key %))))
     ch))
 
+(defn keydown-chan []
+  (key-chan (.-KEYDOWN events/EventType) (fn [k] [:keydown k])))
+
 (defn keyup-chan []
   (key-chan (.-KEYUP events/EventType) (fn [k] [:keyup k])))
 
-(defn keydown-chan []
-  (key-chan (.-KEYDOWN events/EventType) (fn [k] [:keydown k])))
+(defn keypress-chan []
+  (key-chan (.-KEYPRESS events/EventType) (fn [k] [:keypress k])))
 
 (defn frame-process-chan []
   (let [ch (chan)]
@@ -94,8 +122,10 @@
             (put! ch [:frame-process]))))
     ch))
 
+;; }}}
+
 ;; ---------------------------------------------------------------------------
-;; Player logic
+;; Player logic {{{
 
 (defn init-player [x y]
   {:x x :y y :w player-width :h player-height :vx 0 :vy 0 :dead? nil})
@@ -123,8 +153,10 @@
   (fill-style ctx (if dead? "red" "blue"))
   (.fillRect ctx x y w h))
 
+;; }}}
+
 ;; ---------------------------------------------------------------------------
-;; Enemy logic
+;; Enemy logic {{{
 
 (defn init-enemy [x y]
   {:x x :y y :w enemy-width :h enemy-height :vy 0.0 :ay enemy-acceleration})
@@ -141,16 +173,19 @@
   (fill-style ctx "white")
   (.fillRect ctx x y w h))
 
-;; ---------------------------------------------------------------------------
-;; Game logic
+;; }}}
 
-(defn init-world []
-  {:frame 0
+;; ---------------------------------------------------------------------------
+;; Game scene {{{
+
+(defn init-game []
+  {:scene :game
+   :frame 0
    :player (init-player (/ (- canvas-width player-width) 2)
                         (/ (- canvas-height player-height) 2))
    :enemies []})
 
-(defn update-world
+(defn update-game
   [{:keys [frame player enemies] :as world}]
   (let [new-frame (inc frame)
         new-enemies (->> (conj (mapv update-enemy enemies)
@@ -160,39 +195,112 @@
                          (remove nil?))
         new-player (update-player player new-enemies)]
     (merge world
-           {:frame new-frame
+           {:scene (if (:dead? new-player) :gameover :game)
+            :frame new-frame
             :player new-player
             :enemies new-enemies})))
 
-(defn reflect-event
+(defn event-game
   [{:keys [player] :as world} evt v]
   (assoc world :player (on-event-player player evt v)))
 
+(defn render-game!
+  [ctx {:keys [frame player enemies]}]
+  (.clearRect ctx 0 0 canvas-width canvas-height)
+  (render-player! ctx player)
+  (doseq [enemy enemies] (render-enemy! ctx enemy)))
+
+;; }}}
+
+;; ---------------------------------------------------------------------------
+;; Title scene {{{
+
+(defn event-title [world evt v]
+  (if (and (= evt :keypress) (reset-key v))
+    (init-game)
+    world))
+
+(defn render-title! [ctx]
+  (.clearRect ctx 0 0 canvas-width canvas-height)
+  (fill-style ctx "white")
+  (font! ctx "Arial" 12)
+  (text-align! ctx :center)
+  (fill-text! ctx ["Simple game just avoid tofu" "Press \"Enter\" to start game"]
+              (/ canvas-width 2) (/ canvas-height 2) 16))
+
+;; }}}
+
+;; ---------------------------------------------------------------------------
+;; Gameover scene {{{
+
+(defn event-gameover [world evt v]
+  (if (and (= evt :keypress) (reset-key v))
+    (init-game)
+    world))
+
+(defn render-gameover!
+  [ctx {:keys [frame player enemies] :as world}]
+  (render-game! ctx world)
+  (fill-style ctx "rgba(0, 0, 0, 0.5)")
+  (.fillRect ctx 0 0 canvas-width canvas-height)
+  (fill-style ctx "white")
+  (font! ctx "Arial" 12)
+  (text-align! ctx :center)
+  (fill-text! ctx ["Game over" "Press \"Enter\" to restart game"]
+              (/ canvas-width 2) (/ canvas-height 2) 16))
+
+;; }}}
+
+;; ---------------------------------------------------------------------------
+;; World logic {{{
+
+(defn init-world []
+  {:scene :title})
+
+(defn update-world [{:keys [scene] :as world}]
+  (case scene
+    :game (update-game world)
+    world))
+
+(defn event-world [{:keys [scene] :as world} evt v]
+  (case scene
+    :title (event-title world evt v)
+    :game (event-game world evt v)
+    :gameover (event-gameover world evt v)))
+
+(defn render-world! [ctx {:keys [scene] :as world}]
+  (case scene
+    :title (render-title! ctx)
+    :game (render-game! ctx world)
+    :gameover (render-gameover! ctx world)))
+
+;; }}}
+
 (defn main-loop [events-chan render-chan]
-  (go-loop [world (init-world)]
+  (go-loop [{:keys [scene] :as world} (init-world)]
            (let [[evt v] (<! events-chan)]
              (case evt
                :frame-process (let [new-world (update-world world)]
                                 (put! render-chan new-world)
                                 (recur new-world))
-               :keydown (recur (reflect-event world :keydown v))
-               :keyup (recur (reflect-event world :keyup v))
+               :keydown (recur (event-world world :keydown v))
+               :keyup (recur (event-world world :keyup v))
+               :keypress (recur (event-world world :keypress v))
                (recur world)))))
 
 (defn render-loop! [ch]
   (let [{:keys [canvas ctx]} (init-canvas)]
     (go-loop []
-             (let [{:keys [frame player enemies] :as world} (<! ch)]
-               (.clearRect ctx 0 0 canvas-width canvas-height)
-               (render-player! ctx player)
-               (doseq [enemy enemies] (render-enemy! ctx enemy))
+             (let [{:keys [scene] :as world} (<! ch)]
+               (render-world! ctx world)
                (recur)))))
 
 (defn init-events []
   (let [keydown (keydown-chan)
         keyup (keyup-chan)
+        keypress (keypress-chan)
         frame-process (frame-process-chan)]
-    (async/merge [keydown keyup frame-process])))
+    (async/merge [keydown keyup keypress frame-process])))
 
 (defn init []
   (let [events-chan (init-events)
